@@ -72,6 +72,8 @@ defmodule DuckdbEx.MixProject do
       source_ref: "v#{@version}",
       source_url: @source_url,
       homepage_url: @source_url,
+      assets: %{"assets" => "assets"},
+      logo: "assets/duckdb_ex.svg",
       extras: [
         "README.md",
         "AGENT_PROMPT.md",
@@ -101,7 +103,7 @@ defmodule DuckdbEx.MixProject do
       name: "duckdb_ex",
       description: description(),
       files:
-        ~w(lib native mix.exs README.md AGENT_PROMPT.md PROJECT_SUMMARY.md QUICK_START_CHECKLIST.md LICENSE docs),
+        ~w(lib native mix.exs README.md AGENT_PROMPT.md PROJECT_SUMMARY.md QUICK_START_CHECKLIST.md LICENSE docs assets),
       licenses: ["MIT"],
       links: %{
         "GitHub" => @source_url,

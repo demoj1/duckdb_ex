@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/duckdb_ex.svg" alt="DuckDB Elixir Client Logo" width="200" height="200">
+</p>
+
 # DuckDB Elixir
 
 [![CI](https://github.com/nshkrdotcom/duckdb_ex/actions/workflows/elixir.yaml/badge.svg)](https://github.com/nshkrdotcom/duckdb_ex/actions/workflows/elixir.yaml)
