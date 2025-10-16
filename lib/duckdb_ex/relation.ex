@@ -334,4 +334,474 @@ defmodule DuckdbEx.Relation do
       error -> error
     end
   end
+
+  @doc """
+  Performs aggregation on the relation.
+
+  Supports both simple aggregations and GROUP BY aggregations. Aggregation
+  expressions can include common functions like COUNT, SUM, AVG, MIN, MAX,
+  and any SQL aggregate function supported by DuckDB.
+
+  ## Parameters
+
+  - `relation` - The relation to aggregate
+  - `expressions` - Aggregation expression(s) as string or list of strings
+  - `opts` - Options (keyword list)
+    - `:group_by` - List of columns to group by (optional)
+
+  ## Returns
+
+  A new relation with aggregation applied
+
+  ## Examples
+
+      # Simple aggregation
+      relation |> DuckdbEx.Relation.aggregate("count(*) as total")
+
+      # Multiple aggregations
+      relation |> DuckdbEx.Relation.aggregate([
+        "count(*) as count",
+        "sum(amount) as total",
+        "avg(amount) as average"
+      ])
+
+      # Group by single column
+      relation
+      |> DuckdbEx.Relation.aggregate("sum(sales) as total", group_by: ["region"])
+
+      # Group by multiple columns
+      relation
+      |> DuckdbEx.Relation.aggregate(
+        ["sum(sales) as total", "count(*) as count"],
+        group_by: ["region", "year"]
+      )
+
+      # Filter after aggregation (HAVING clause)
+      relation
+      |> DuckdbEx.Relation.aggregate("sum(amount) as total", group_by: ["category"])
+      |> DuckdbEx.Relation.filter("total > 1000")
+
+  Reference: DuckDBPyRelation.aggregate() in Python
+  """
+  @spec aggregate(t(), String.t() | list(String.t()), keyword()) :: t()
+  def aggregate(relation, expressions, opts \\ [])
+
+  def aggregate(%__MODULE__{sql: sql} = relation, expressions, opts) when is_list(expressions) do
+    group_by = Keyword.get(opts, :group_by, [])
+    agg_str = Enum.join(expressions, ", ")
+
+    new_sql =
+      if group_by == [] do
+        # Simple aggregation without GROUP BY
+        "SELECT #{agg_str} FROM (#{sql}) AS _aggregate"
+      else
+        # GROUP BY aggregation
+        group_cols = Enum.join(group_by, ", ")
+        "SELECT #{group_cols}, #{agg_str} FROM (#{sql}) AS _aggregate GROUP BY #{group_cols}"
+      end
+
+    %{relation | sql: new_sql}
+  end
+
+  def aggregate(%__MODULE__{} = relation, expression, opts) when is_binary(expression) do
+    aggregate(relation, [expression], opts)
+  end
+
+  @doc """
+  Convenience function for COUNT aggregation.
+
+  Returns a relation with a COUNT(*) aggregation. The result will have a
+  column named "count".
+
+  ## Parameters
+
+  - `relation` - The relation to count
+
+  ## Returns
+
+  A new relation with COUNT aggregation
+
+  ## Examples
+
+      relation |> DuckdbEx.Relation.count()
+      # Equivalent to: aggregate("count(*) as count")
+
+  Reference: DuckDBPyRelation.count() in Python
+  """
+  @spec count(t()) :: t()
+  def count(%__MODULE__{} = relation) do
+    aggregate(relation, "count(*) as count")
+  end
+
+  @doc """
+  Convenience function for SUM aggregation.
+
+  Returns a relation with a SUM aggregation on the specified column.
+  The result will have a column named "sum".
+
+  ## Parameters
+
+  - `relation` - The relation to aggregate
+  - `column` - Column name or expression to sum
+
+  ## Returns
+
+  A new relation with SUM aggregation
+
+  ## Examples
+
+      relation |> DuckdbEx.Relation.sum("amount")
+      # Equivalent to: aggregate("sum(amount) as sum")
+
+  Reference: DuckDBPyRelation.sum() in Python
+  """
+  @spec sum(t(), String.t()) :: t()
+  def sum(%__MODULE__{} = relation, column) when is_binary(column) do
+    aggregate(relation, "sum(#{column}) as sum")
+  end
+
+  @doc """
+  Convenience function for AVG aggregation.
+
+  Returns a relation with an AVG aggregation on the specified column.
+  The result will have a column named "avg".
+
+  ## Parameters
+
+  - `relation` - The relation to aggregate
+  - `column` - Column name or expression to average
+
+  ## Returns
+
+  A new relation with AVG aggregation
+
+  ## Examples
+
+      relation |> DuckdbEx.Relation.avg("price")
+      # Equivalent to: aggregate("avg(price) as avg")
+
+  Reference: DuckDBPyRelation.avg() in Python
+  """
+  @spec avg(t(), String.t()) :: t()
+  def avg(%__MODULE__{} = relation, column) when is_binary(column) do
+    aggregate(relation, "avg(#{column}) as avg")
+  end
+
+  @doc """
+  Convenience function for MIN aggregation.
+
+  Returns a relation with a MIN aggregation on the specified column.
+  The result will have a column named "min".
+
+  ## Parameters
+
+  - `relation` - The relation to aggregate
+  - `column` - Column name or expression to find minimum
+
+  ## Returns
+
+  A new relation with MIN aggregation
+
+  ## Examples
+
+      relation |> DuckdbEx.Relation.min("temperature")
+      # Equivalent to: aggregate("min(temperature) as min")
+
+  Reference: DuckDBPyRelation.min() in Python
+  """
+  @spec min(t(), String.t()) :: t()
+  def min(%__MODULE__{} = relation, column) when is_binary(column) do
+    aggregate(relation, "min(#{column}) as min")
+  end
+
+  @doc """
+  Convenience function for MAX aggregation.
+
+  Returns a relation with a MAX aggregation on the specified column.
+  The result will have a column named "max".
+
+  ## Parameters
+
+  - `relation` - The relation to aggregate
+  - `column` - Column name or expression to find maximum
+
+  ## Returns
+
+  A new relation with MAX aggregation
+
+  ## Examples
+
+      relation |> DuckdbEx.Relation.max("score")
+      # Equivalent to: aggregate("max(score) as max")
+
+  Reference: DuckDBPyRelation.max() in Python
+  """
+  @spec max(t(), String.t()) :: t()
+  def max(%__MODULE__{} = relation, column) when is_binary(column) do
+    aggregate(relation, "max(#{column}) as max")
+  end
+
+  @doc """
+  Removes duplicate rows from the relation.
+
+  Equivalent to SQL DISTINCT. Returns a new relation with duplicate rows removed.
+
+  ## Parameters
+
+  - `relation` - The relation to remove duplicates from
+
+  ## Returns
+
+  A new relation with DISTINCT applied
+
+  ## Examples
+
+      # Remove duplicate rows
+      relation |> DuckdbEx.Relation.distinct()
+
+      # Chain with other operations
+      relation
+      |> DuckdbEx.Relation.filter("age > 25")
+      |> DuckdbEx.Relation.distinct()
+      |> DuckdbEx.Relation.order("name ASC")
+
+  Reference: DuckDBPyRelation.distinct() in Python
+  """
+  @spec distinct(t()) :: t()
+  def distinct(%__MODULE__{sql: sql} = relation) do
+    new_sql = "SELECT DISTINCT * FROM (#{sql}) AS _distinct"
+    %{relation | sql: new_sql}
+  end
+
+  @doc """
+  Unions two relations.
+
+  Equivalent to SQL UNION. Returns a new relation combining rows from both
+  relations, with duplicates removed.
+
+  ## Parameters
+
+  - `relation1` - First relation
+  - `relation2` - Second relation
+
+  ## Returns
+
+  A new relation with both relations unioned
+
+  ## Examples
+
+      # Union two relations
+      rel1 = DuckdbEx.Connection.sql(conn, "SELECT 1 as x")
+      rel2 = DuckdbEx.Connection.sql(conn, "SELECT 2 as x")
+      combined = DuckdbEx.Relation.union(rel1, rel2)
+
+      # Can be chained
+      rel1
+      |> DuckdbEx.Relation.union(rel2)
+      |> DuckdbEx.Relation.union(rel3)
+
+  ## Notes
+
+  Both relations must have the same number of columns and compatible types.
+  UNION automatically removes duplicates. Use UNION ALL if you want to keep duplicates.
+
+  Reference: DuckDBPyRelation.union() in Python
+  """
+  @spec union(t(), t()) :: t()
+  def union(%__MODULE__{conn: conn, sql: sql1}, %__MODULE__{sql: sql2}) do
+    new_sql = "(#{sql1}) UNION (#{sql2})"
+    %__MODULE__{conn: conn, sql: new_sql, alias: nil}
+  end
+
+  @doc """
+  Intersects two relations.
+
+  Equivalent to SQL INTERSECT. Returns a new relation containing only rows
+  that appear in both relations.
+
+  ## Parameters
+
+  - `relation1` - First relation
+  - `relation2` - Second relation
+
+  ## Returns
+
+  A new relation with the intersection
+
+  ## Examples
+
+      # Find common rows
+      rel1 = DuckdbEx.Connection.sql(conn, "SELECT * FROM (VALUES (1), (2), (3)) t(x)")
+      rel2 = DuckdbEx.Connection.sql(conn, "SELECT * FROM (VALUES (2), (3), (4)) t(x)")
+      common = DuckdbEx.Relation.intersect(rel1, rel2)
+      # Returns rows with x = 2 and x = 3
+
+  ## Notes
+
+  Both relations must have the same number of columns and compatible types.
+
+  Reference: DuckDBPyRelation.intersect() in Python
+  """
+  @spec intersect(t(), t()) :: t()
+  def intersect(%__MODULE__{conn: conn, sql: sql1}, %__MODULE__{sql: sql2}) do
+    new_sql = "(#{sql1}) INTERSECT (#{sql2})"
+    %__MODULE__{conn: conn, sql: new_sql, alias: nil}
+  end
+
+  @doc """
+  Returns rows in the first relation but not in the second.
+
+  Equivalent to SQL EXCEPT. Returns a new relation containing rows from
+  the first relation that are not in the second relation.
+
+  ## Parameters
+
+  - `relation1` - First relation
+  - `relation2` - Second relation to exclude
+
+  ## Returns
+
+  A new relation with the difference
+
+  ## Examples
+
+      # Find rows only in first relation
+      rel1 = DuckdbEx.Connection.sql(conn, "SELECT * FROM (VALUES (1), (2), (3)) t(x)")
+      rel2 = DuckdbEx.Connection.sql(conn, "SELECT * FROM (VALUES (2), (3), (4)) t(x)")
+      diff = DuckdbEx.Relation.except_(rel1, rel2)
+      # Returns row with x = 1
+
+  ## Notes
+
+  Both relations must have the same number of columns and compatible types.
+
+  The function is named `except_` (with underscore) because `except` is a
+  reserved keyword in Elixir.
+
+  Reference: DuckDBPyRelation.except_() in Python
+  """
+  @spec except_(t(), t()) :: t()
+  def except_(%__MODULE__{conn: conn, sql: sql1}, %__MODULE__{sql: sql2}) do
+    new_sql = "(#{sql1}) EXCEPT (#{sql2})"
+    %__MODULE__{conn: conn, sql: new_sql, alias: nil}
+  end
+
+  @doc """
+  Joins two relations.
+
+  Supports various join types: inner, left, right, and outer joins.
+  Returns a new relation combining rows from both relations based on the
+  join condition.
+
+  ## Parameters
+
+  - `relation1` - First relation (left side)
+  - `relation2` - Second relation (right side)
+  - `condition` - Join condition as SQL string
+  - `opts` - Options (keyword list)
+    - `:type` - Join type (`:inner`, `:left`, `:right`, `:outer`), defaults to `:inner`
+
+  ## Returns
+
+  A new relation with the join applied
+
+  ## Examples
+
+      # Inner join
+      users = DuckdbEx.Connection.table(conn, "users")
+      orders = DuckdbEx.Connection.table(conn, "orders")
+      joined = DuckdbEx.Relation.join(users, orders, "users.id = orders.user_id")
+
+      # Left join
+      joined = DuckdbEx.Relation.join(users, orders, "users.id = orders.user_id", type: :left)
+
+      # Right join
+      joined = DuckdbEx.Relation.join(users, orders, "users.id = orders.user_id", type: :right)
+
+      # Outer join
+      joined = DuckdbEx.Relation.join(users, orders, "users.id = orders.user_id", type: :outer)
+
+      # Chain multiple joins
+      users
+      |> DuckdbEx.Relation.join(orders, "users.id = orders.user_id")
+      |> DuckdbEx.Relation.join(products, "orders.product_id = products.id")
+
+  ## Notes
+
+  The join condition should reference columns with table names or aliases to avoid ambiguity.
+
+  Reference: DuckDBPyRelation.join() in Python
+  """
+  @spec join(t(), t(), String.t(), keyword()) :: t()
+  def join(relation1, relation2, condition, opts \\ [])
+
+  def join(%__MODULE__{conn: conn, sql: sql1}, %__MODULE__{sql: sql2}, condition, opts) do
+    join_type =
+      case Keyword.get(opts, :type, :inner) do
+        :inner -> "INNER JOIN"
+        :left -> "LEFT JOIN"
+        :right -> "RIGHT JOIN"
+        :outer -> "FULL OUTER JOIN"
+      end
+
+    # Extract table names from join condition to use as aliases
+    # This is a simple heuristic: look for table.column patterns
+    {left_alias, right_alias} = extract_table_aliases(condition)
+
+    new_sql = """
+    SELECT * FROM (#{sql1}) AS #{left_alias}
+    #{join_type} (#{sql2}) AS #{right_alias}
+    ON #{condition}
+    """
+
+    %__MODULE__{conn: conn, sql: String.trim(new_sql), alias: nil}
+  end
+
+  # Extract table names from a join condition like "users.id = orders.user_id"
+  defp extract_table_aliases(condition) do
+    # Find all table.column patterns
+    case Regex.scan(~r/(\w+)\.\w+/, condition) do
+      [[_, left] | [[_, right] | _]] -> {left, right}
+      [[_, left]] -> {left, "_right"}
+      _ -> {"_left", "_right"}
+    end
+  end
+
+  @doc """
+  Performs a cross join (cartesian product) of two relations.
+
+  Returns a new relation containing all possible combinations of rows
+  from both relations.
+
+  ## Parameters
+
+  - `relation1` - First relation
+  - `relation2` - Second relation
+
+  ## Returns
+
+  A new relation with the cross join
+
+  ## Examples
+
+      rel1 = DuckdbEx.Connection.sql(conn, "SELECT * FROM (VALUES (1), (2)) t(x)")
+      rel2 = DuckdbEx.Connection.sql(conn, "SELECT * FROM (VALUES (3), (4)) t(y)")
+      crossed = DuckdbEx.Relation.cross(rel1, rel2)
+      # Returns 4 rows: (1,3), (1,4), (2,3), (2,4)
+
+  ## Notes
+
+  Cross joins can produce very large result sets (rows1 × rows2).
+  Use with caution on large relations.
+
+  Reference: DuckDBPyRelation.cross() in Python
+  """
+  @spec cross(t(), t()) :: t()
+  def cross(%__MODULE__{conn: conn, sql: sql1}, %__MODULE__{sql: sql2}) do
+    new_sql = """
+    SELECT * FROM (#{sql1}) CROSS JOIN (#{sql2})
+    """
+
+    %__MODULE__{conn: conn, sql: String.trim(new_sql), alias: nil}
+  end
 end

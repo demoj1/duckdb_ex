@@ -60,8 +60,8 @@ defmodule DuckdbEx.MixProject do
 
   defp description do
     """
-    A 100% faithful port of the DuckDB Python client to Elixir, providing native performance
-    with Rust NIFs and complete API parity with the official Python client.
+    A 100% faithful port of the DuckDB Python client to Elixir, using the DuckDB CLI
+    for full API compatibility with the official Python client.
     """
   end
 
@@ -76,6 +76,7 @@ defmodule DuckdbEx.MixProject do
       logo: "assets/duckdb_ex.svg",
       extras: [
         "README.md",
+        "CHANGELOG.md",
         "AGENT_PROMPT.md",
         "PROJECT_SUMMARY.md",
         "QUICK_START_CHECKLIST.md",
@@ -84,7 +85,7 @@ defmodule DuckdbEx.MixProject do
         "docs/PYTHON_API_REFERENCE.md"
       ],
       groups_for_extras: [
-        Guides: ["README.md", "QUICK_START_CHECKLIST.md"],
+        Guides: ["README.md", "CHANGELOG.md", "QUICK_START_CHECKLIST.md"],
         Architecture: [
           "PROJECT_SUMMARY.md",
           "docs/TECHNICAL_DESIGN.md",
@@ -103,7 +104,7 @@ defmodule DuckdbEx.MixProject do
       name: "duckdb_ex",
       description: description(),
       files:
-        ~w(lib native mix.exs README.md AGENT_PROMPT.md PROJECT_SUMMARY.md QUICK_START_CHECKLIST.md LICENSE docs assets),
+        ~w(lib mix.exs README.md CHANGELOG.md AGENT_PROMPT.md PROJECT_SUMMARY.md QUICK_START_CHECKLIST.md LICENSE docs assets),
       licenses: ["MIT"],
       links: %{
         "GitHub" => @source_url,

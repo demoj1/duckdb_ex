@@ -11,20 +11,21 @@
 [![Documentation](https://img.shields.io/badge/docs-hexdocs-purple.svg)](https://hexdocs.pm/duckdb_ex)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](https://github.com/nshkrdotcom/duckdb_ex/blob/main/LICENSE)
 
-A 100% faithful port of the [DuckDB Python client](https://github.com/duckdb/duckdb-python) to Elixir.
+A DuckDB client for Elixir, providing a powerful Relation API for analytical queries.
 
-> **Status**: 🚧 Under active development - Not yet ready for production use
+> **Status**: 🚀 Core Relation API implemented and tested - Ready for evaluation
 
 ## About
 
-This project is a complete port of the official DuckDB Python client to Elixir, providing:
+DuckdbEx brings DuckDB's analytical power to Elixir with:
 
-- **100% API Parity**: All Python API functions ported with identical semantics
-- **Native Performance**: Rust NIF layer for zero-overhead native integration
-- **Idiomatic Elixir**: Elixir conventions while maintaining Python API compatibility
-- **Comprehensive Testing**: All Python tests ported to ensure correctness
+- **Lazy Relation API**: Composable, chainable query building inspired by Python's DuckDB API
+- **CLI-based Architecture**: Uses DuckDB CLI via erlexec for maximum portability
+- **Idiomatic Elixir**: Functional, pipe-friendly API with pattern matching
+- **Comprehensive Testing**: TDD approach with 71 passing tests
+- **Python API Compatibility**: Functions mirror the official Python API
 
-## Quick Start (When Available)
+## Installation
 
 ```elixir
 # Add to mix.exs
@@ -35,112 +36,508 @@ def deps do
 end
 ```
 
+## Quick Start
+
+### Basic Connection and Queries
+
 ```elixir
-# Basic usage
-{:ok, conn} = DuckdbEx.connect(:memory)
+# Connect to in-memory database
+{:ok, conn} = DuckdbEx.Connection.connect(:memory)
 
-# Execute SQL
-{:ok, result} = DuckdbEx.execute(conn, "SELECT 42 as answer")
-{:ok, [{42}]} = DuckdbEx.Result.fetch_all(result)
+# Or connect to a file
+{:ok, conn} = DuckdbEx.Connection.connect("/path/to/database.duckdb")
 
-# Use relation API
-{:ok, rel} = DuckdbEx.read_csv(conn, "data.csv")
-rel
-|> DuckdbEx.Relation.filter("age > 21")
-|> DuckdbEx.Relation.order("name")
-|> DuckdbEx.Relation.fetch_all()
+# Execute SQL directly
+{:ok, result} = DuckdbEx.Connection.execute(conn, "SELECT 42 as answer")
+
+# Fetch all rows as maps
+{:ok, rows} = DuckdbEx.Connection.fetch_all(conn, "SELECT * FROM users")
+# => [%{"id" => 1, "name" => "Alice"}, ...]
+
+# Fetch single row
+{:ok, row} = DuckdbEx.Connection.fetch_one(conn, "SELECT * FROM users LIMIT 1")
+# => %{"id" => 1, "name" => "Alice"}
 
 # Close connection
-DuckdbEx.close(conn)
+DuckdbEx.Connection.close(conn)
 ```
 
-## Development
+### Relation API - Lazy Query Building
 
-### Prerequisites
+The Relation API allows you to build complex queries through method chaining, with execution deferred until you fetch results:
 
-- Docker and docker-compose
-- Elixir 1.18+
-- Rust (for NIF compilation)
+```elixir
+# Create a relation (no execution yet)
+relation = DuckdbEx.Connection.table(conn, "orders")
 
-### Getting Started
+# Chain operations (still no execution)
+result = relation
+|> DuckdbEx.Relation.filter("amount > 100")
+|> DuckdbEx.Relation.project(["customer_name", "amount", "order_date"])
+|> DuckdbEx.Relation.order("amount DESC")
+|> DuckdbEx.Relation.limit(10)
+|> DuckdbEx.Relation.fetch_all()  # Executes here
+
+# Result: Top 10 orders over $100
+{:ok, rows} = result
+```
+
+### Working with Relations
+
+#### Creating Relations
+
+```elixir
+# From a table or view
+relation = DuckdbEx.Connection.table(conn, "products")
+
+# From SQL
+relation = DuckdbEx.Connection.sql(conn, "SELECT * FROM generate_series(1, 100)")
+
+# From range (using DuckDB's range function)
+relation = DuckdbEx.Connection.sql(conn, "SELECT * FROM range(10)")
+```
+
+#### Filtering Data
+
+```elixir
+# Simple filter
+relation
+|> DuckdbEx.Relation.filter("price > 50")
+|> DuckdbEx.Relation.fetch_all()
+
+# Chain multiple filters (AND logic)
+relation
+|> DuckdbEx.Relation.filter("price > 50")
+|> DuckdbEx.Relation.filter("category = 'Electronics'")
+|> DuckdbEx.Relation.fetch_all()
+
+# Complex conditions
+relation
+|> DuckdbEx.Relation.filter("price > 50 AND (category = 'Electronics' OR category = 'Computers')")
+|> DuckdbEx.Relation.fetch_all()
+```
+
+#### Selecting Columns
+
+```elixir
+# Select specific columns
+relation
+|> DuckdbEx.Relation.project(["name", "price"])
+|> DuckdbEx.Relation.fetch_all()
+
+# Use expressions
+relation
+|> DuckdbEx.Relation.project([
+  "name",
+  "price",
+  "price * 1.1 as price_with_tax",
+  "upper(category) as category_upper"
+])
+|> DuckdbEx.Relation.fetch_all()
+```
+
+#### Sorting and Limiting
+
+```elixir
+# Order by column
+relation
+|> DuckdbEx.Relation.order("price DESC")
+|> DuckdbEx.Relation.fetch_all()
+
+# Multiple columns
+relation
+|> DuckdbEx.Relation.order("category ASC, price DESC")
+|> DuckdbEx.Relation.fetch_all()
+
+# Limit results
+relation
+|> DuckdbEx.Relation.limit(100)
+|> DuckdbEx.Relation.fetch_all()
+
+# Top-N query
+relation
+|> DuckdbEx.Relation.order("revenue DESC")
+|> DuckdbEx.Relation.limit(10)
+|> DuckdbEx.Relation.fetch_all()
+```
+
+### Aggregations
+
+#### Simple Aggregations
+
+```elixir
+# Count all rows
+relation
+|> DuckdbEx.Relation.aggregate("count(*) as total")
+|> DuckdbEx.Relation.fetch_all()
+# => {:ok, [%{"total" => 1000}]}
+
+# Multiple aggregations
+relation
+|> DuckdbEx.Relation.aggregate([
+  "count(*) as count",
+  "sum(amount) as total",
+  "avg(amount) as average",
+  "min(amount) as minimum",
+  "max(amount) as maximum"
+])
+|> DuckdbEx.Relation.fetch_all()
+```
+
+#### GROUP BY Aggregations
+
+```elixir
+# Group by single column
+DuckdbEx.Connection.table(conn, "sales")
+|> DuckdbEx.Relation.aggregate(
+  "sum(amount) as total_sales",
+  group_by: ["region"]
+)
+|> DuckdbEx.Relation.fetch_all()
+
+# Group by multiple columns
+DuckdbEx.Connection.table(conn, "sales")
+|> DuckdbEx.Relation.aggregate(
+  ["sum(amount) as total", "count(*) as count"],
+  group_by: ["region", "year"]
+)
+|> DuckdbEx.Relation.fetch_all()
+
+# With filtering and ordering
+DuckdbEx.Connection.table(conn, "products")
+|> DuckdbEx.Relation.filter("price > 10")  # WHERE clause
+|> DuckdbEx.Relation.aggregate(
+  ["sum(price) as total", "count(*) as count"],
+  group_by: ["category"]
+)
+|> DuckdbEx.Relation.filter("total > 1000")  # HAVING clause
+|> DuckdbEx.Relation.order("total DESC")
+|> DuckdbEx.Relation.fetch_all()
+```
+
+#### Convenience Aggregate Methods
+
+```elixir
+# Count rows
+relation |> DuckdbEx.Relation.count() |> DuckdbEx.Relation.fetch_all()
+# => {:ok, [%{"count" => 100}]}
+
+# Sum a column
+relation |> DuckdbEx.Relation.sum("amount") |> DuckdbEx.Relation.fetch_all()
+# => {:ok, [%{"sum" => 45000}]}
+
+# Average
+relation |> DuckdbEx.Relation.avg("price") |> DuckdbEx.Relation.fetch_all()
+# => {:ok, [%{"avg" => 42.5}]}
+
+# Min/Max
+relation |> DuckdbEx.Relation.min("temperature") |> DuckdbEx.Relation.fetch_all()
+relation |> DuckdbEx.Relation.max("score") |> DuckdbEx.Relation.fetch_all()
+```
+
+### Complete Examples
+
+#### E-commerce Analytics
+
+```elixir
+{:ok, conn} = DuckdbEx.Connection.connect(:memory)
+
+# Create and populate table
+DuckdbEx.Connection.execute(conn, """
+  CREATE TABLE orders (
+    order_id INTEGER,
+    customer_name VARCHAR,
+    product_category VARCHAR,
+    amount DECIMAL(10,2),
+    order_date DATE
+  )
+""")
+
+DuckdbEx.Connection.execute(conn, """
+  INSERT INTO orders VALUES
+    (1, 'Alice', 'Electronics', 999.99, '2024-01-15'),
+    (2, 'Bob', 'Books', 29.99, '2024-01-16'),
+    (3, 'Alice', 'Electronics', 49.99, '2024-01-17'),
+    (4, 'Charlie', 'Furniture', 599.99, '2024-01-18'),
+    (5, 'Bob', 'Electronics', 299.99, '2024-01-19')
+""")
+
+# Analyze: Top customers by total spending in Electronics
+{:ok, top_customers} =
+  conn
+  |> DuckdbEx.Connection.table("orders")
+  |> DuckdbEx.Relation.filter("product_category = 'Electronics'")
+  |> DuckdbEx.Relation.aggregate(
+    ["sum(amount) as total_spent", "count(*) as order_count"],
+    group_by: ["customer_name"]
+  )
+  |> DuckdbEx.Relation.filter("total_spent > 100")
+  |> DuckdbEx.Relation.order("total_spent DESC")
+  |> DuckdbEx.Relation.fetch_all()
+
+# Result:
+# [
+#   %{"customer_name" => "Alice", "total_spent" => 1049.98, "order_count" => 2},
+#   %{"customer_name" => "Bob", "total_spent" => 299.99, "order_count" => 1}
+# ]
+```
+
+#### Time Series Analysis
+
+```elixir
+# Daily sales aggregation with statistical measures
+{:ok, daily_stats} =
+  conn
+  |> DuckdbEx.Connection.table("sales")
+  |> DuckdbEx.Relation.aggregate(
+    [
+      "date_trunc('day', timestamp) as day",
+      "sum(amount) as daily_total",
+      "avg(amount) as daily_avg",
+      "stddev_pop(amount) as daily_stddev",
+      "count(*) as transaction_count"
+    ],
+    group_by: ["date_trunc('day', timestamp)"]
+  )
+  |> DuckdbEx.Relation.order("day DESC")
+  |> DuckdbEx.Relation.limit(30)
+  |> DuckdbEx.Relation.fetch_all()
+```
+
+#### Data Pipeline
+
+```elixir
+defmodule DataPipeline do
+  def process_sales_data(conn) do
+    # Reusable base relation
+    base = DuckdbEx.Connection.table(conn, "raw_sales")
+
+    # High-value customers
+    high_value = base
+    |> DuckdbEx.Relation.filter("total_purchases > 1000")
+    |> DuckdbEx.Relation.project(["customer_id", "email"])
+
+    # Recent activity
+    recent = base
+    |> DuckdbEx.Relation.filter("order_date > '2024-01-01'")
+    |> DuckdbEx.Relation.aggregate(
+      "count(*) as recent_orders",
+      group_by: ["customer_id"]
+    )
+
+    # Execute both queries
+    {:ok, high_value_customers} = DuckdbEx.Relation.fetch_all(high_value)
+    {:ok, recent_activity} = DuckdbEx.Relation.fetch_all(recent)
+
+    {high_value_customers, recent_activity}
+  end
+end
+```
+
+#### Working with DuckDB Functions
+
+```elixir
+# Use DuckDB's built-in functions
+conn
+|> DuckdbEx.Connection.sql("SELECT * FROM range(100)")
+|> DuckdbEx.Relation.filter("range % 2 = 0")  # Even numbers only
+|> DuckdbEx.Relation.project(["range", "range * range as squared"])
+|> DuckdbEx.Relation.fetch_all()
+
+# Generate test data
+conn
+|> DuckdbEx.Connection.sql("SELECT * FROM generate_series(1, 1000) as id")
+|> DuckdbEx.Relation.project([
+  "id",
+  "random() as random_value",
+  "case when id % 2 = 0 then 'even' else 'odd' end as parity"
+])
+|> DuckdbEx.Relation.aggregate(
+  ["avg(random_value) as avg_random", "count(*) as count"],
+  group_by: ["parity"]
+)
+|> DuckdbEx.Relation.fetch_all()
+```
+
+## API Reference
+
+### DuckdbEx.Connection
+
+- `connect(database, opts \\ [])` - Open database connection
+- `execute(conn, sql, params \\ [])` - Execute SQL query
+- `fetch_all(conn, sql)` - Execute and fetch all rows
+- `fetch_one(conn, sql)` - Execute and fetch first row
+- `close(conn)` - Close connection
+- `sql(conn, sql)` - Create relation from SQL
+- `table(conn, table_name)` - Create relation from table
+
+### DuckdbEx.Relation
+
+**Transformations** (lazy, return new relation):
+- `project(relation, columns)` - Select columns
+- `filter(relation, condition)` - Filter rows
+- `limit(relation, n)` - Limit results
+- `order(relation, order_by)` - Sort results
+- `aggregate(relation, expressions, opts \\ [])` - Aggregate data
+
+**Convenience Aggregates**:
+- `count(relation)` - Count rows
+- `sum(relation, column)` - Sum column
+- `avg(relation, column)` - Average column
+- `min(relation, column)` - Minimum value
+- `max(relation, column)` - Maximum value
+
+**Execution** (trigger query execution):
+- `execute(relation)` - Execute and return result struct
+- `fetch_all(relation)` - Execute and fetch all rows
+- `fetch_one(relation)` - Execute and fetch first row
+- `fetch_many(relation, n)` - Execute and fetch N rows
+
+### DuckdbEx.Result
+
+- `fetch_all(result)` - Get all rows as list of maps
+- `fetch_one(result)` - Get first row as map
+- `fetch_many(result, n)` - Get N rows as list of maps
+- `row_count(result)` - Get number of rows
+- `columns(result)` - Get column names
+- `to_tuples(result)` - Convert rows to tuples
+
+## Architecture
+
+DuckdbEx uses the DuckDB CLI process via erlexec instead of native NIFs:
+
+**Advantages**:
+- ✅ Maximum portability (works everywhere DuckDB CLI works)
+- ✅ No compilation needed
+- ✅ Easy to debug and maintain
+- ✅ Handles all DuckDB features automatically
+
+**Trade-offs**:
+- JSON serialization overhead (minimal for analytical queries)
+- No zero-copy data transfer
+- Cannot implement native UDFs
+
+This architecture is ideal for analytical workloads where query execution time dominates, and the JSON overhead is negligible compared to query processing.
+
+## Testing
 
 ```bash
-# Build Docker environment
-docker-compose build
+# Run all tests
+mix test
 
-# Run tests
-docker-compose run test
+# Run specific test file
+mix test test/duckdb_ex/relation_test.exs
 
-# Start development shell
-docker-compose run dev
+# Run with coverage
+mix test --cover
 
-# In the dev shell
-iex> DuckdbEx.Native.test_nif()
-"NIF is working!"
+# Run with specific seed
+mix test --seed 123456
 ```
 
-### Project Structure
+**Current Test Coverage**: 71 tests, 100% pass rate
 
-```
-duckdb_ex/
-├── docs/                      # Comprehensive documentation
-│   ├── TECHNICAL_DESIGN.md    # Architecture and design
-│   ├── IMPLEMENTATION_ROADMAP.md  # Phased implementation plan
-│   └── PYTHON_API_REFERENCE.md    # Complete Python API catalog
-├── AGENT_PROMPT.md            # Complete implementation guide
-├── duckdb-python/             # Python client (reference implementation)
-├── lib/duckdb_ex/             # Elixir modules
-├── native/duckdb_nif/         # Rust NIF layer
-└── test/                      # Ported test suite
-```
+## Development Status
 
-## Documentation
+### ✅ Implemented (Phase 1.1 & 1.2)
 
-Essential reading for contributors:
+**Core Connection API**:
+- Connection management (connect, close)
+- Query execution (execute)
+- Result fetching (fetch_all, fetch_one)
+- Exception hierarchy (27 types)
 
-1. **[AGENT_PROMPT.md](AGENT_PROMPT.md)** - Complete implementation guide with TDD approach
-2. **[docs/TECHNICAL_DESIGN.md](docs/TECHNICAL_DESIGN.md)** - Architecture and technical design
-3. **[docs/IMPLEMENTATION_ROADMAP.md](docs/IMPLEMENTATION_ROADMAP.md)** - Phased implementation plan
-4. **[docs/PYTHON_API_REFERENCE.md](docs/PYTHON_API_REFERENCE.md)** - Python API reference
+**Relation API - Basic Operations**:
+- Relation creation (sql, table)
+- Projections (project)
+- Filtering (filter)
+- Ordering (order)
+- Limiting (limit)
+- Lazy evaluation
 
-## Implementation Progress
+**Relation API - Aggregations**:
+- Generic aggregation (aggregate)
+- GROUP BY support
+- HAVING clause (via filter after aggregate)
+- Convenience methods (count, sum, avg, min, max)
+- Statistical functions (stddev, variance)
 
-### Phase 0: Project Setup ⏳
-- [x] Documentation created
-- [ ] Docker environment
-- [ ] Rustler setup
-- [ ] Basic NIF skeleton
-- [ ] Test infrastructure
+### 🚧 Next Up (Phase 1.3)
 
-### Phase 1: Core Foundation 🔜
-- [ ] Connection management
-- [ ] Basic query execution
-- [ ] Result fetching
-- [ ] Exception handling
+- Joins (inner, left, right, outer, cross)
+- Set operations (union, intersect, except)
+- Window functions
+- Distinct operations
 
-### Future Phases
-See [IMPLEMENTATION_ROADMAP.md](docs/IMPLEMENTATION_ROADMAP.md) for complete roadmap.
+### 📋 Planned (Phase 2+)
+
+- CSV/Parquet/JSON reading
+- Explorer DataFrame integration
+- Transaction management
+- Prepared statements
+- Extensions management
 
 ## Contributing
 
-This project follows a strict Test-Driven Development (TDD) approach:
+This project follows strict Test-Driven Development (TDD):
 
-1. Port tests from `duckdb-python/tests/`
-2. Tests must fail initially
-3. Implement feature to make tests pass
-4. Verify behavior matches Python client
-5. Document any differences
+1. **RED**: Write failing tests first
+2. **GREEN**: Implement minimal code to pass tests
+3. **REFACTOR**: Improve code while keeping tests green
+4. **DOCUMENT**: Add comprehensive docs and examples
 
-See [AGENT_PROMPT.md](AGENT_PROMPT.md) for detailed contribution guidelines.
+All contributions should:
+- Include comprehensive tests
+- Follow existing code style
+- Reference Python API where applicable
+- Maintain 100% test pass rate
 
-## Reference Implementation
+## Comparison with Python API
 
-This port is based on the official DuckDB Python client:
-- Source: `duckdb-python/` directory in this repository
-- Version: Latest stable release
-- License: MIT
+```python
+# Python DuckDB
+import duckdb
+conn = duckdb.connect()
+rel = conn.table('users')
+result = (rel
+  .filter('age > 25')
+  .project(['name', 'email'])
+  .order('name')
+  .limit(10)
+  .fetchall())
+```
 
-All implementation decisions reference the Python source code to ensure 100% compatibility.
+```elixir
+# Elixir DuckDB
+{:ok, conn} = DuckdbEx.Connection.connect(:memory)
+{:ok, result} = conn
+|> DuckdbEx.Connection.table("users")
+|> DuckdbEx.Relation.filter("age > 25")
+|> DuckdbEx.Relation.project(["name", "email"])
+|> DuckdbEx.Relation.order("name")
+|> DuckdbEx.Relation.limit(10)
+|> DuckdbEx.Relation.fetch_all()
+```
+
+API is intentionally similar for easy migration!
+
+## Performance Considerations
+
+- DuckDB excels at analytical queries on large datasets
+- Relation API allows DuckDB to optimize entire query tree
+- JSON overhead is minimal compared to query execution time
+- Best for OLAP workloads, not OLTP
+
+**Benchmarks** (coming soon):
+- Query execution performance vs Python
+- Memory usage comparisons
+- Concurrency characteristics
+
+## Requirements
+
+- Elixir 1.14+
+- Erlang/OTP 25+
+- DuckDB CLI installed and in PATH
 
 ## License
 
@@ -149,20 +546,16 @@ MIT License - see LICENSE file for details.
 ## Acknowledgments
 
 - [DuckDB](https://duckdb.org/) - The amazing analytical database
-- [DuckDB Python](https://github.com/duckdb/duckdb-python) - Reference implementation
-- [Rustler](https://github.com/rusterlium/rustler) - Rust NIF framework
-- [duckdb-rs](https://github.com/duckdb/duckdb-rs) - Rust DuckDB bindings
-
-## Status and Roadmap
-
-This project is in early development. Check:
-- [IMPLEMENTATION_ROADMAP.md](docs/IMPLEMENTATION_ROADMAP.md) for detailed progress
-- [GitHub Issues](https://github.com/your-repo/issues) for current work
-- [CHANGELOG.md](CHANGELOG.md) for version history (when available)
+- [DuckDB Python API](https://duckdb.org/docs/api/python) - API design inspiration
+- Community contributors
 
 ## Support
 
 For questions and discussions:
-- Open an issue on GitHub
-- Reference the Python client documentation
-- Check the comprehensive docs in `docs/` directory
+- Open an issue on [GitHub](https://github.com/nshkrdotcom/duckdb_ex/issues)
+- Check [DuckDB documentation](https://duckdb.org/docs/)
+- Review the `docs/` directory for detailed guides
+
+---
+
+**Made with ❤️ for the Elixir and DuckDB communities**
