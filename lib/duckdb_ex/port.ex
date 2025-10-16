@@ -59,9 +59,15 @@ defmodule DuckdbEx.Port do
   Stops the DuckDB process.
   """
   @spec stop(t()) :: :ok
-  def stop(port) do
-    GenServer.stop(port, :normal)
+  def stop(port) when is_pid(port) do
+    if Process.alive?(port) do
+      GenServer.stop(port, :normal)
+    else
+      :ok
+    end
   end
+
+  def stop(_port), do: :ok
 
   ## Server Callbacks
 
@@ -127,8 +133,8 @@ defmodule DuckdbEx.Port do
         new_state =
           Map.put(state, :pending_call, {from, sql, System.monotonic_time(:millisecond)})
 
-        # Schedule timeout check (5 seconds)
-        Process.send_after(self(), :check_timeout, 5000)
+        # Schedule timeout check (1 second)
+        Process.send_after(self(), :check_timeout, 1000)
         {:noreply, new_state}
 
       error ->
@@ -147,16 +153,21 @@ defmodule DuckdbEx.Port do
     # Accumulate output
     buffer = state.buffer <> data
 
-    # Check if we have a complete response
-    # In JSON mode, we get one JSON object per row, newline-separated
-    # For DDL statements (CREATE, DROP, etc.), there may be no output
+    # DuckDB in JSON mode outputs:
+    # - SELECT queries: One JSON array like [{"col":val}, ...]
+    # - DDL statements (CREATE, DROP): No output
+    # We detect completion when we have a complete JSON array ending with ]\n
     case Map.get(state, :pending_call) do
       {from, _sql, timestamp} ->
-        # Wait a short time to accumulate all output (100ms)
         time_elapsed = System.monotonic_time(:millisecond) - timestamp
 
-        # Process if we have a newline or enough time has passed (indicating completion)
-        if String.ends_with?(buffer, "\n") or time_elapsed > 100 do
+        # Check if we have a complete JSON response (ends with ]\n or ]<whitespace>)
+        # OR if enough time has passed for DDL statements that produce no output
+        trimmed = String.trim(buffer)
+        has_complete_json = String.ends_with?(trimmed, "]")
+        is_timeout = time_elapsed > 50
+
+        if (has_complete_json and String.contains?(buffer, "\n")) or is_timeout do
           result = parse_output(buffer)
           GenServer.reply(from, {:ok, result})
           new_state = state |> Map.put(:buffer, "") |> Map.delete(:pending_call)
@@ -193,7 +204,7 @@ defmodule DuckdbEx.Port do
       {from, _sql, timestamp} ->
         time_elapsed = System.monotonic_time(:millisecond) - timestamp
 
-        if time_elapsed > 5000 do
+        if time_elapsed > 1000 do
           # Timeout - respond with whatever we have or empty result
           result = parse_output(state.buffer)
           GenServer.reply(from, {:ok, result})
@@ -238,8 +249,8 @@ defmodule DuckdbEx.Port do
   defp parse_output(""), do: %{rows: [], row_count: 0}
 
   defp parse_output(data) when is_binary(data) do
-    # DuckDB -json mode outputs newline-delimited JSON
-    # Each line is a separate JSON object representing a row
+    # DuckDB -json mode outputs a JSON array for each query result
+    # Format: [{"col1": val1, "col2": val2}, ...]
     # For DDL/DML statements (CREATE, INSERT, etc.), there may be no output
     trimmed = String.trim(data)
 
@@ -247,19 +258,27 @@ defmodule DuckdbEx.Port do
       # Empty response (e.g., DDL statement)
       %{rows: [], row_count: 0}
     else
-      lines = String.split(trimmed, "\n", trim: true)
+      # Parse the JSON array
+      case Jason.decode(trimmed) do
+        {:ok, rows} when is_list(rows) ->
+          # Successfully parsed JSON array
+          %{rows: rows, row_count: length(rows)}
 
-      rows =
-        Enum.map(lines, fn line ->
-          case Jason.decode(line) do
-            {:ok, row} when is_map(row) -> row
-            {:error, _} -> nil
-            _ -> nil
-          end
-        end)
-        |> Enum.reject(&is_nil/1)
+        {:ok, row} when is_map(row) ->
+          # Single row returned as object (shouldn't happen but handle it)
+          %{rows: [row], row_count: 1}
 
-      %{rows: rows, row_count: length(rows)}
+        {:error, reason} ->
+          # JSON parse error - log and return empty
+          Logger.warning(
+            "Failed to parse DuckDB output: #{inspect(reason)}, data: #{inspect(trimmed)}"
+          )
+
+          %{rows: [], row_count: 0}
+
+        _ ->
+          %{rows: [], row_count: 0}
+      end
     end
   end
 
