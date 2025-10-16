@@ -110,7 +110,8 @@ defmodule DuckdbEx.Port do
           exec_pid: exec_pid,
           os_pid: os_pid,
           database: db_path,
-          buffer: ""
+          buffer: "",
+          error_buffer: ""
         }
 
         {:ok, state}
@@ -158,10 +159,23 @@ defmodule DuckdbEx.Port do
       {from, _sql} ->
         # Check if buffer contains the completion marker
         if String.contains?(buffer, @completion_marker) do
-          # Parse and strip the marker from the output
-          result = parse_and_strip_marker(buffer)
-          GenServer.reply(from, {:ok, result})
-          new_state = state |> Map.put(:buffer, "") |> Map.delete(:pending_call)
+          # Command is complete - check if there was an error
+          if state.error_buffer != "" do
+            # There was an error - return it
+            error = parse_error(state.error_buffer)
+            GenServer.reply(from, {:error, error})
+          else
+            # No error - parse and strip the marker from the output
+            result = parse_and_strip_marker(buffer)
+            GenServer.reply(from, {:ok, result})
+          end
+
+          new_state =
+            state
+            |> Map.put(:buffer, "")
+            |> Map.put(:error_buffer, "")
+            |> Map.delete(:pending_call)
+
           {:noreply, new_state}
         else
           # Continue accumulating until we see the marker
@@ -176,16 +190,32 @@ defmodule DuckdbEx.Port do
   def handle_info({:stderr, os_pid, data}, %{os_pid: os_pid} = state) do
     Logger.error("DuckDB stderr: #{data}")
 
-    case Map.get(state, :pending_call) do
-      {from, _sql} ->
-        # Parse error message and create appropriate exception
-        error = parse_error(data)
-        GenServer.reply(from, {:error, error})
-        new_state = state |> Map.put(:buffer, "") |> Map.delete(:pending_call)
-        {:noreply, new_state}
+    # Check if this is a "transaction aborted" error - if so, the marker won't execute
+    # We need to reply immediately instead of waiting for the marker
+    if String.contains?(data, "Current transaction is aborted") do
+      case Map.get(state, :pending_call) do
+        {from, _sql} ->
+          # Transaction is aborted - parse and return error immediately
+          error_buffer = state.error_buffer <> data
+          error = parse_error(error_buffer)
+          GenServer.reply(from, {:error, error})
 
-      nil ->
-        {:noreply, state}
+          new_state =
+            state
+            |> Map.put(:buffer, "")
+            |> Map.put(:error_buffer, "")
+            |> Map.delete(:pending_call)
+
+          {:noreply, new_state}
+
+        nil ->
+          error_buffer = state.error_buffer <> data
+          {:noreply, %{state | error_buffer: error_buffer}}
+      end
+    else
+      # Normal error - accumulate and wait for completion marker
+      error_buffer = state.error_buffer <> data
+      {:noreply, %{state | error_buffer: error_buffer}}
     end
   end
 
