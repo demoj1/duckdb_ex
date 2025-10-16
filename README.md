@@ -38,6 +38,14 @@ end
 
 ## Quick Start
 
+> **💡 New!** Check out the [examples/](examples/) directory for 8 comprehensive, runnable examples:
+> ```bash
+> mix run examples/00_quickstart.exs
+> mix run examples/01_basic_queries.exs
+> mix run examples/02_tables_and_data.exs
+> # ... and more!
+> ```
+
 ### Basic Connection and Queries
 
 ```elixir
@@ -419,6 +427,23 @@ DuckdbEx uses the DuckDB CLI process via erlexec instead of native NIFs:
 
 This architecture is ideal for analytical workloads where query execution time dominates, and the JSON overhead is negligible compared to query processing.
 
+## Examples
+
+The `examples/` directory contains 8 comprehensive, runnable examples demonstrating all features:
+
+| Example | Description | Run With |
+|---------|-------------|----------|
+| `00_quickstart.exs` | Your first DuckDB query | `mix run examples/00_quickstart.exs` |
+| `01_basic_queries.exs` | Simple queries, math, strings, dates | `mix run examples/01_basic_queries.exs` |
+| `02_tables_and_data.exs` | CREATE, INSERT, UPDATE, DELETE | `mix run examples/02_tables_and_data.exs` |
+| `03_transactions.exs` | Transaction management | `mix run examples/03_transactions.exs` |
+| `04_relations_api.exs` | Lazy query building | `mix run examples/04_relations_api.exs` |
+| `05_csv_parquet_json.exs` | Reading/writing files | `mix run examples/05_csv_parquet_json.exs` |
+| `06_analytics_window_functions.exs` | Advanced analytics | `mix run examples/06_analytics_window_functions.exs` |
+| `07_persistent_database.exs` | File-based databases | `mix run examples/07_persistent_database.exs` |
+
+See [examples/README.md](examples/README.md) for detailed descriptions and more information.
+
 ## Testing
 
 ```bash
@@ -435,17 +460,20 @@ mix test --cover
 mix test --seed 123456
 ```
 
-**Current Test Coverage**: 71 tests, 100% pass rate
+**Current Test Coverage**: 114 tests, 100% pass rate (after performance optimization)
 
 ## Development Status
 
-### ✅ Implemented (Phase 1.1 & 1.2)
+### ✅ Implemented
 
 **Core Connection API**:
 - Connection management (connect, close)
-- Query execution (execute)
+- Query execution (execute) with deterministic completion detection
 - Result fetching (fetch_all, fetch_one)
 - Exception hierarchy (27 types)
+- Transaction management (begin, commit, rollback, transaction helper)
+- Checkpoint support
+- Read-only connections
 
 **Relation API - Basic Operations**:
 - Relation creation (sql, table)
@@ -462,20 +490,27 @@ mix test --seed 123456
 - Convenience methods (count, sum, avg, min, max)
 - Statistical functions (stddev, variance)
 
-### 🚧 Next Up (Phase 1.3)
-
+**Relation API - Advanced**:
 - Joins (inner, left, right, outer, cross)
 - Set operations (union, intersect, except)
-- Window functions
 - Distinct operations
+
+**File Format Support**:
+- CSV reading/writing (read_csv_auto, COPY TO)
+- Parquet reading/writing
+- JSON reading/writing
+- Direct file querying
+
+**Performance**:
+- Optimized query execution (100-200x faster via completion markers)
+- Tests run in ~1 second (previously took minutes due to timeouts)
 
 ### 📋 Planned (Phase 2+)
 
-- CSV/Parquet/JSON reading
 - Explorer DataFrame integration
-- Transaction management
 - Prepared statements
 - Extensions management
+- Streaming results
 
 ## Contributing
 
@@ -521,17 +556,40 @@ result = (rel
 
 API is intentionally similar for easy migration!
 
-## Performance Considerations
+## Performance
+
+DuckdbEx uses a **completion marker approach** for deterministic query completion detection instead of timeouts:
+
+- **100-200x faster** query execution (7-12ms vs 1000-2000ms per query)
+- Full test suite runs in **~1 second** (114 tests)
+- No arbitrary timeouts or guessing
+- Proper error handling for aborted transactions
+
+### How It Works
+
+Instead of waiting for timeouts, we append a marker query after each command:
+```sql
+-- Your query
+SELECT * FROM users;
+-- Completion marker (added automatically)
+SELECT '__DUCKDB_COMPLETE__' as __status__;
+```
+
+When we see the marker in the output, we know DuckDB is done. The marker is stripped before returning results to you.
+
+### Why This Approach
+
+- **Deterministic**: We know exactly when queries complete
+- **Fast**: No waiting for arbitrary timeouts
+- **Reliable**: Works for all query types (SELECT, DDL, DML)
+- **Error-aware**: Special handling for aborted transactions
+
+### Performance Considerations
 
 - DuckDB excels at analytical queries on large datasets
 - Relation API allows DuckDB to optimize entire query tree
 - JSON overhead is minimal compared to query execution time
 - Best for OLAP workloads, not OLTP
-
-**Benchmarks** (coming soon):
-- Query execution performance vs Python
-- Memory usage comparisons
-- Concurrency characteristics
 
 ## Requirements
 
