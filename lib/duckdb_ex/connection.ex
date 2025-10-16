@@ -29,6 +29,7 @@ defmodule DuckdbEx.Connection do
 
   alias DuckdbEx.Port
   alias DuckdbEx.Result
+  alias DuckdbEx.Relation
 
   @type t :: Port.t()
 
@@ -142,6 +143,71 @@ defmodule DuckdbEx.Connection do
       {:ok, result} -> {:ok, Result.fetch_one(result)}
       error -> error
     end
+  end
+
+  @doc """
+  Creates a relation from a SQL query.
+
+  Returns a lazy relation that can be composed with other operations before
+  execution. The SQL is not executed until a fetch operation is called.
+
+  ## Parameters
+
+  - `conn` - The connection
+  - `sql` - SQL query string
+
+  ## Returns
+
+  A `%DuckdbEx.Relation{}` struct
+
+  ## Examples
+
+      # Create relation (not executed yet)
+      relation = DuckdbEx.Connection.sql(conn, "SELECT * FROM users")
+
+      # Chain operations
+      result = relation
+      |> DuckdbEx.Relation.filter("age > 25")
+      |> DuckdbEx.Relation.fetch_all()
+
+  Reference: DuckDBPyConnection.sql() in Python
+  """
+  @spec sql(t(), String.t()) :: Relation.t()
+  def sql(conn, sql) when is_binary(sql) do
+    Relation.new(conn, sql)
+  end
+
+  @doc """
+  Creates a relation from a table or view name.
+
+  Returns a lazy relation representing the entire table or view. The table
+  is not queried until a fetch operation is called.
+
+  ## Parameters
+
+  - `conn` - The connection
+  - `table_name` - Name of the table or view
+
+  ## Returns
+
+  A `%DuckdbEx.Relation{}` struct
+
+  ## Examples
+
+      # Create relation from table
+      relation = DuckdbEx.Connection.table(conn, "users")
+
+      # Chain operations
+      active_users = relation
+      |> DuckdbEx.Relation.filter("status = 'active'")
+      |> DuckdbEx.Relation.fetch_all()
+
+  Reference: DuckDBPyConnection.table() in Python
+  """
+  @spec table(t(), String.t()) :: Relation.t()
+  def table(conn, table_name) when is_binary(table_name) do
+    sql = "SELECT * FROM #{table_name}"
+    Relation.new(conn, sql)
   end
 
   @doc """
