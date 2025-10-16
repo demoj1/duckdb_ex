@@ -31,7 +31,7 @@ DuckdbEx brings DuckDB's analytical power to Elixir with:
 # Add to mix.exs
 def deps do
   [
-    {:duckdb_ex, "~> 0.1.0"}
+    {:duckdb_ex, "~> 0.1.1"}
   ]
 end
 ```
