@@ -211,6 +211,180 @@ defmodule DuckdbEx.Connection do
   end
 
   @doc """
+  Begins a transaction.
+
+  Starts a new transaction on the connection. All subsequent queries will be
+  executed within the transaction context until commit or rollback is called.
+
+  ## Parameters
+
+  - `conn` - The connection
+
+  ## Returns
+
+  - `{:ok, result}` - Transaction started successfully
+  - `{:error, exception}` - Failed to start transaction
+
+  ## Examples
+
+      {:ok, conn} = DuckdbEx.Connection.connect(:memory)
+      {:ok, _} = DuckdbEx.Connection.begin(conn)
+      {:ok, _} = DuckdbEx.Connection.execute(conn, "INSERT INTO users VALUES (1, 'Alice')")
+      {:ok, _} = DuckdbEx.Connection.commit(conn)
+
+  Reference: DuckDBPyConnection.begin() in Python
+  """
+  @spec begin(t()) :: {:ok, term()} | {:error, term()}
+  def begin(conn) do
+    execute(conn, "BEGIN TRANSACTION")
+  end
+
+  @doc """
+  Commits the current transaction.
+
+  Commits all changes made within the current transaction, making them permanent.
+
+  ## Parameters
+
+  - `conn` - The connection
+
+  ## Returns
+
+  - `{:ok, result}` - Transaction committed successfully
+  - `{:error, exception}` - Failed to commit transaction
+
+  ## Examples
+
+      {:ok, _} = DuckdbEx.Connection.begin(conn)
+      {:ok, _} = DuckdbEx.Connection.execute(conn, "INSERT INTO users VALUES (1, 'Alice')")
+      {:ok, _} = DuckdbEx.Connection.commit(conn)
+
+  Reference: DuckDBPyConnection.commit() in Python
+  """
+  @spec commit(t()) :: {:ok, term()} | {:error, term()}
+  def commit(conn) do
+    execute(conn, "COMMIT")
+  end
+
+  @doc """
+  Rolls back the current transaction.
+
+  Reverts all changes made within the current transaction.
+
+  ## Parameters
+
+  - `conn` - The connection
+
+  ## Returns
+
+  - `{:ok, result}` - Transaction rolled back successfully
+  - `{:error, exception}` - Failed to rollback transaction
+
+  ## Examples
+
+      {:ok, _} = DuckdbEx.Connection.begin(conn)
+      {:ok, _} = DuckdbEx.Connection.execute(conn, "INSERT INTO users VALUES (1, 'Alice')")
+      {:ok, _} = DuckdbEx.Connection.rollback(conn)
+
+  Reference: DuckDBPyConnection.rollback() in Python
+  """
+  @spec rollback(t()) :: {:ok, term()} | {:error, term()}
+  def rollback(conn) do
+    execute(conn, "ROLLBACK")
+  end
+
+  @doc """
+  Executes a function within a managed transaction.
+
+  This is the recommended way to use transactions. The function is executed
+  within a transaction context. If the function completes successfully, the
+  transaction is committed. If an exception is raised or an error occurs, the
+  transaction is automatically rolled back.
+
+  ## Parameters
+
+  - `conn` - The connection
+  - `fun` - A function that takes the connection as an argument
+
+  ## Returns
+
+  - `{:ok, result}` - Transaction completed successfully, returns the function's result
+  - `{:error, exception}` - Transaction failed or was rolled back
+
+  ## Examples
+
+      # Successful transaction
+      {:ok, result} = DuckdbEx.Connection.transaction(conn, fn conn ->
+        {:ok, _} = DuckdbEx.Connection.execute(conn, "INSERT INTO users VALUES (1, 'Alice')")
+        {:ok, _} = DuckdbEx.Connection.execute(conn, "INSERT INTO users VALUES (2, 'Bob')")
+        :success
+      end)
+
+      # Transaction with automatic rollback on error
+      {:error, _} = DuckdbEx.Connection.transaction(conn, fn conn ->
+        {:ok, _} = DuckdbEx.Connection.execute(conn, "INSERT INTO users VALUES (1, 'Alice')")
+        raise "Something went wrong!"
+      end)
+
+  Reference: Similar to Python context manager pattern with DuckDB transactions
+  """
+  @spec transaction(t(), (t() -> term())) :: {:ok, term()} | {:error, term()}
+  def transaction(conn, fun) when is_function(fun, 1) do
+    case begin(conn) do
+      {:ok, _} ->
+        try do
+          result = fun.(conn)
+
+          # Check if the result is an error tuple - if so, rollback
+          case result do
+            {:error, _} = error ->
+              rollback(conn)
+              error
+
+            _ ->
+              case commit(conn) do
+                {:ok, _} -> {:ok, result}
+                error -> error
+              end
+          end
+        rescue
+          exception ->
+            rollback(conn)
+            {:error, exception}
+        end
+
+      error ->
+        error
+    end
+  end
+
+  @doc """
+  Creates a checkpoint.
+
+  Forces a checkpoint of the write-ahead log (WAL) to the database file.
+  This ensures all changes are persisted to disk.
+
+  ## Parameters
+
+  - `conn` - The connection
+
+  ## Returns
+
+  - `{:ok, result}` - Checkpoint created successfully
+  - `{:error, exception}` - Failed to create checkpoint
+
+  ## Examples
+
+      {:ok, _} = DuckdbEx.Connection.checkpoint(conn)
+
+  Reference: DuckDBPyConnection.checkpoint() in Python
+  """
+  @spec checkpoint(t()) :: {:ok, term()} | {:error, term()}
+  def checkpoint(conn) do
+    execute(conn, "CHECKPOINT")
+  end
+
+  @doc """
   Closes the database connection.
 
   After closing, the connection should not be used for any operations.

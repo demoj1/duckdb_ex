@@ -120,21 +120,20 @@ defmodule DuckdbEx.Port do
     end
   end
 
+  # Completion marker used to detect when DuckDB has finished processing
+  @completion_marker "__DUCKDB_COMPLETE__"
+
   @impl true
   def handle_call({:execute, sql}, from, state) do
-    # Send SQL to DuckDB process
-    # Ensure the SQL ends with a semicolon and newline
-    command = ensure_terminated(sql)
+    # Send SQL to DuckDB process followed by a marker query
+    # This ensures we always get output, even for DDL statements
+    command = build_command_with_marker(sql)
 
     case :exec.send(state.os_pid, command) do
       :ok ->
         # Store the caller to respond later when output arrives
-        # Set a timeout to handle cases where DuckDB doesn't respond
-        new_state =
-          Map.put(state, :pending_call, {from, sql, System.monotonic_time(:millisecond)})
+        new_state = Map.put(state, :pending_call, {from, sql})
 
-        # Schedule timeout check (1 second)
-        Process.send_after(self(), :check_timeout, 1000)
         {:noreply, new_state}
 
       error ->
@@ -142,10 +141,11 @@ defmodule DuckdbEx.Port do
     end
   end
 
-  defp ensure_terminated(sql) do
+  defp build_command_with_marker(sql) do
     sql = String.trim(sql)
     sql = if String.ends_with?(sql, ";"), do: sql, else: sql <> ";"
-    sql <> "\n"
+    # Add marker query to signal completion
+    sql <> "\nSELECT '#{@completion_marker}' as __status__;\n"
   end
 
   @impl true
@@ -153,27 +153,18 @@ defmodule DuckdbEx.Port do
     # Accumulate output
     buffer = state.buffer <> data
 
-    # DuckDB in JSON mode outputs:
-    # - SELECT queries: One JSON array like [{"col":val}, ...]
-    # - DDL statements (CREATE, DROP): No output
-    # We detect completion when we have a complete JSON array ending with ]\n
+    # Look for the completion marker to know when DuckDB is done
     case Map.get(state, :pending_call) do
-      {from, _sql, timestamp} ->
-        time_elapsed = System.monotonic_time(:millisecond) - timestamp
-
-        # Check if we have a complete JSON response (ends with ]\n or ]<whitespace>)
-        # OR if enough time has passed for DDL statements that produce no output
-        trimmed = String.trim(buffer)
-        has_complete_json = String.ends_with?(trimmed, "]")
-        is_timeout = time_elapsed > 50
-
-        if (has_complete_json and String.contains?(buffer, "\n")) or is_timeout do
-          result = parse_output(buffer)
+      {from, _sql} ->
+        # Check if buffer contains the completion marker
+        if String.contains?(buffer, @completion_marker) do
+          # Parse and strip the marker from the output
+          result = parse_and_strip_marker(buffer)
           GenServer.reply(from, {:ok, result})
           new_state = state |> Map.put(:buffer, "") |> Map.delete(:pending_call)
           {:noreply, new_state}
         else
-          # Continue accumulating
+          # Continue accumulating until we see the marker
           {:noreply, %{state | buffer: buffer}}
         end
 
@@ -186,33 +177,12 @@ defmodule DuckdbEx.Port do
     Logger.error("DuckDB stderr: #{data}")
 
     case Map.get(state, :pending_call) do
-      {from, _sql, _timestamp} ->
+      {from, _sql} ->
         # Parse error message and create appropriate exception
         error = parse_error(data)
         GenServer.reply(from, {:error, error})
         new_state = state |> Map.put(:buffer, "") |> Map.delete(:pending_call)
         {:noreply, new_state}
-
-      nil ->
-        {:noreply, state}
-    end
-  end
-
-  def handle_info(:check_timeout, state) do
-    # Check if we have a pending call that's timed out
-    case Map.get(state, :pending_call) do
-      {from, _sql, timestamp} ->
-        time_elapsed = System.monotonic_time(:millisecond) - timestamp
-
-        if time_elapsed > 1000 do
-          # Timeout - respond with whatever we have or empty result
-          result = parse_output(state.buffer)
-          GenServer.reply(from, {:ok, result})
-          new_state = state |> Map.put(:buffer, "") |> Map.delete(:pending_call)
-          {:noreply, new_state}
-        else
-          {:noreply, state}
-        end
 
       nil ->
         {:noreply, state}
@@ -244,6 +214,23 @@ defmodule DuckdbEx.Port do
     args = args ++ [database]
 
     args
+  end
+
+  defp parse_and_strip_marker(data) when is_binary(data) do
+    # Split output by newlines to handle multiple JSON results
+    # The marker query will be the last result
+    lines = String.split(data, "\n", trim: true)
+
+    # Filter out the marker line and keep only actual query results
+    user_result_lines =
+      lines
+      |> Enum.reject(fn line ->
+        String.contains?(line, @completion_marker)
+      end)
+
+    # Join back and parse
+    user_data = Enum.join(user_result_lines, "\n")
+    parse_output(user_data)
   end
 
   defp parse_output(""), do: %{rows: [], row_count: 0}
