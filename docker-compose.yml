@@ -1,0 +1,82 @@
+# DuckDB Elixir - Docker Compose Configuration
+version: '3.8'
+
+services:
+  # Development environment
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - .:/app
+      - build_cache:/app/_build
+      - deps_cache:/app/deps
+      - cargo_cache:/root/.cargo
+    environment:
+      - MIX_ENV=dev
+      - RUST_BACKTRACE=1
+    command: iex -S mix
+    stdin_open: true
+    tty: true
+    working_dir: /app
+
+  # Test environment
+  test:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - .:/app
+      - build_cache:/app/_build
+      - deps_cache:/app/deps
+      - cargo_cache:/root/.cargo
+    environment:
+      - MIX_ENV=test
+      - SHELL=/bin/sh
+    command: mix test
+    working_dir: /app
+
+  # Documentation builder
+  docs:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - .:/app
+      - build_cache:/app/_build
+      - deps_cache:/app/deps
+    environment:
+      - MIX_ENV=dev
+    command: mix docs
+    working_dir: /app
+
+  # Code formatter
+  format:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - .:/app
+    environment:
+      - MIX_ENV=dev
+    command: mix format
+    working_dir: /app
+
+  # Static analysis
+  credo:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - .:/app
+      - build_cache:/app/_build
+      - deps_cache:/app/deps
+    environment:
+      - MIX_ENV=dev
+    command: mix credo
+    working_dir: /app
+
+volumes:
+  build_cache:
+  deps_cache:
+  cargo_cache:
