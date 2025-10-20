@@ -23,18 +23,13 @@ defmodule DuckdbEx.MixProject do
   # Run "mix help compile.app" to learn about applications.
   def application do
     [
-      extra_applications: [:logger],
-      # Don't auto-start erlexec - we start it manually with options
-      included_applications: [:erlexec]
+      extra_applications: [:logger]
     ]
   end
 
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      # OS process manager for running DuckDB CLI
-      {:erlexec, "~> 2.0"},
-
       # Decimal precision for DuckDB DECIMAL type
       {:decimal, "~> 2.0"},
 
@@ -49,8 +44,6 @@ defmodule DuckdbEx.MixProject do
 
       # Development and documentation
       {:ex_doc, "~> 0.38.2", only: :dev, runtime: false},
-      {:credo, "~> 1.7.12", only: [:dev, :test], runtime: false},
-      {:dialyxir, "~> 1.4.5", only: [:dev], runtime: false},
 
       # Testing
       {:mox, "~> 1.0", only: :test},
